@@ -1,0 +1,12 @@
+- insert:
+    - id: llm-fusion
+      name: "@deepseek-ai/cordis-plugin-group"
+      group: true
+      config:
+        # Both children keep the loader entry ids their client halves already
+        # key their settings on ('opencode-go', 'protocom-api'), so an existing
+        # profile keeps every stored value and section after the install.
+        - id: opencode-go
+          name: dsh-llm-fusion/opencode-go
+        - id: protocom-api
+          name: dsh-llm-fusion/protocom

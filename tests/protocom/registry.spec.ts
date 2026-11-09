@@ -1,0 +1,307 @@
+import { describe, expect, it } from 'vitest'
+import {
+  acceptsImages,
+  catalogEntry,
+  CONTEXT_100K,
+  CONTEXT_LADDER,
+  contextChoicesFor,
+  contextLabel,
+  contextVariantsFor,
+  DEFAULT_RECOMMENDED,
+  displayNameWithContext,
+  FALLBACK_CONTEXT_WINDOW,
+  GO_REGISTRY,
+  identityKey,
+  matchRegistry,
+  REFUSED_CHAT_MODEL_IDS,
+  REGISTRY,
+  servesChat,
+  servesGroup,
+} from '../../src/engines/protocom/model-registry.ts'
+import type { RegistryEntry } from '../../src/engines/protocom/model-registry.ts'
+
+describe('model-registry', () => {
+  it('matches known ids with their declared facts', () => {
+    const prefixed = matchRegistry('deepseek/deepseek-v4.1-flash')
+    const bare = matchRegistry('deepseek-v4.1-flash')
+    expect(prefixed?.displayName).toBe('DeepSeek V4.1 Flash')
+    expect(bare?.displayName).toBe('DeepSeek V4.1 Flash')
+    expect(prefixed?.contextWindow).toBe(1_048_576)
+    // The relay's disabling word is `none`; it answers 400 to `off` and names
+    // its own enum. Verified live 2026-09-27.
+    expect(prefixed?.reasoning).toEqual({ efforts: ['none', 'low', 'high', 'max'], defaultEffort: 'none' })
+    // Verified against the endpoint: the flash model accepts image input.
+    expect(prefixed?.vision).toBe(true)
+  })
+
+  it('pins kimi-k3 to its forced context window and reasoning vocabulary', () => {
+    const entry = matchRegistry('kimi-k3')
+    expect(entry?.displayName).toBe('Kimi K3')
+    expect(entry?.contextWindow).toBe(262_144)
+    // Widened after live probing: minimal, medium, xhigh and max all answer 200
+    // here; only `none` is refused. A test that pinned the narrower pair was
+    // pinning a menu restriction as though it were a capability.
+    expect(entry?.reasoning).toEqual({ efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' })
+    expect(entry?.vision).toBe(true)
+  })
+
+  it('declares the effort vocabulary a changed endpoint actually accepts', () => {
+    // This entry used to assert `reasoning` was UNDEFINED, on the recorded
+    // finding that the Moonshot route failed every request carrying
+    // `reasoning_effort` with HTTP 400 "invalid moonshotai provider options".
+    // Re-probed 2026-10-01: the route now accepts six of the seven levels, so
+    // that assertion was pinning a stale observation -- and it was the reason
+    // this model had no Effort submenu at all. The vocabulary is the measured
+    // one, and `medium` is deliberately absent because the relay refuses it.
+    const entry = matchRegistry('moonshotai/Kimi-K2.7-Code')
+    expect(entry?.displayName).toBe('Kimi K2.7 Code')
+    expect(entry?.reasoning?.efforts).toEqual(['none', 'minimal', 'low', 'high', 'xhigh', 'max'])
+    expect(entry?.reasoning?.efforts).not.toContain('medium')
+    expect(entry?.vision).toBe(true)
+  })
+
+  it('recommends the models whose reasoning content actually streams', () => {
+    // The shipped recommendation orders the menu; it removes nothing.
+    // mimo-v2.5 was once third. It is refused on this relay now (404 for every
+    // credential), and a refused id is not in the menu, so it cannot lead it.
+    expect(DEFAULT_RECOMMENDED).toEqual(['kimi-k3', 'glm-5.2'])
+    // The flash model hides its reasoning, so it is not recommended by default.
+    expect(DEFAULT_RECOMMENDED).not.toContain('deepseek/deepseek-v4.1-flash')
+  })
+
+  it('resolves an alias to its model identity', () => {
+    expect(identityKey('deepseek-v4.1-flash')).toBe('deepseek/deepseek-v4.1-flash')
+    // An unknown id is its own identity.
+    expect(identityKey('meta/unknown')).toBe('meta/unknown')
+  })
+
+  it('keeps two same-named routes apart when they behave differently', () => {
+    // Aliasing joins by display name, which is right for the same model listed
+    // under several ids. These two share a name, a window and a vocabulary but
+    // NOT their thinking semantics: live-verified 2026-09-27, the bare id
+    // answers 400 to a disabled-thinking request where this one answers 200.
+    // A setting made on either must not silently govern both.
+    expect(identityKey('zai-org/GLM-5.2')).toBe('zai-org/GLM-5.2')
+    expect(identityKey('glm-5.2')).toBe('glm-5.2')
+    // The opt-out works in BOTH directions: the other side cannot absorb it
+    // either, or a choice made there would still land on both.
+    expect(identityKey('zai-org/GLM-5.2')).not.toBe(identityKey('glm-5.2'))
+  })
+
+  it('keeps every advertised model catalogued rather than blocking any', () => {
+    // A model the endpoint currently refuses stays described here: the picker
+    // is how a deployment says what it wants, and a model that starts serving
+    // again should simply start working.
+    for (const id of [
+      'google/gemini-3.7-flash',
+      'tencent/hy4-preview',
+      'inclusionai/ling-3.0-flash-sante:free',
+      'Qwen/Qwen3.8-Flash',
+    ]) {
+      expect(matchRegistry(id)?.displayName, id).toBeTruthy()
+    }
+    const stepfun = matchRegistry('step-5-preview')
+    expect(servesGroup(stepfun as RegistryEntry, 'stepfun')).toBe(true)
+    expect(servesGroup(stepfun as RegistryEntry, 'aggregate')).toBe(false)
+  })
+
+  it('declares image input where the endpoint accepted one', () => {
+    const vision = REGISTRY.filter(entry => entry.vision === true).map(entry => entry.id)
+    expect(vision).toContain('kimi-k3')
+    expect(vision).toContain('gpt-5.6-sol')
+    expect(vision).toContain('step-5-preview')
+  })
+
+  it('declares the models verified or documented as text-only', () => {
+    // Text-only by the vendor's own documentation.
+    expect(matchRegistry('glm-5.3')?.vision).toBe(false)
+    expect(matchRegistry('glm-5.2')?.vision).toBe(false)
+    // The endpoint answered 404 "no endpoints found that support image input".
+    expect(matchRegistry('mimo-v2.5-pro')?.vision).toBe(false)
+  })
+
+  it('catalogues the StepFun flagship the endpoint answered for', () => {
+    const entry = matchRegistry('step-5-preview')
+    expect(entry?.displayName).toBe('Step 5 Preview')
+    expect(entry?.contextWindow).toBe(1_048_576)
+    expect(entry?.vision).toBe(true)
+    expect(entry?.groups).toEqual(['stepfun'])
+  })
+
+  it('keeps the ids the endpoint refuses out of every group', () => {
+    // Verified by request with the key that lists them: the audio and
+    // image-editing ids answer 404 and the two Step-3.5 snapshots answer 400,
+    // so none of them can serve a chat turn.
+    expect(REFUSED_CHAT_MODEL_IDS).toEqual([
+      'step-3.5-flash',
+      'step-3.5-flash-2603',
+      'step-explore',
+      'step-image-edit-2',
+      'stepaudio-2.5-asr',
+      'stepaudio-2.5-chat',
+      'stepaudio-2.5-realtime',
+      'stepaudio-2.5-tts',
+      // Aggregate ids: listed, but 'not available on this endpoint' on both routes.
+      'Qwen/Qwen3.8-Flash',
+      'google/gemini-3.7-flash',
+      'tencent/hy4-preview',
+      'inclusionai/ling-3.0-flash-sante:free',
+      // Re-verified 2026-09-27: the bare id answers "not available on this
+      // endpoint" while the `:free` variant is simply not listed.
+      'meituan/LongCat-2.0',
+      // Registry entries no credential lists and every route 404s. This list
+      // is family-scoped, so mimo-v2.5 stays in the OpenCode Go menu.
+      'mimo-v2.5',
+      'mimo-v2.5-pro',
+      'meituan/LongCat-2.0:free',
+    ])
+    expect(servesChat('step-5-preview')).toBe(true)
+    expect(servesChat('stepaudio-2.5-tts')).toBe(false)
+    // A refused id must never be a group membership source: the registry
+    // fallback would re-offer it even when the live listing omits it. It may
+    // still carry metadata (the four aggregate ids keep a context window),
+    // as long as no group claims it.
+    for (const id of REFUSED_CHAT_MODEL_IDS) expect(matchRegistry(id)?.groups, id).toBeUndefined()
+  })
+
+  it('resolves image input permissively, with the deployment able to say no', () => {
+    // Nobody has judged this id, and the endpoint is the authority on modality,
+    // so it accepts images: a wrong "no" made Step 3.7/5 unreachable with one.
+    expect(acceptsImages('meta/llama-x')).toBe(true)
+    // A verified text-only verdict still blocks...
+    expect(acceptsImages('glm-5.3')).toBe(false)
+    // ...and the deployment can overrule either way.
+    expect(acceptsImages('meta/llama-x', new Map([['meta/llama-x', false]]))).toBe(false)
+    expect(acceptsImages('glm-5.3', new Map([['glm-5.3', true]]))).toBe(true)
+    // A choice made against one alias spelling configures the model once.
+    expect(acceptsImages('deepseek-v4.1-flash', new Map([['deepseek/deepseek-v4.1-flash', false]]))).toBe(false)
+  })
+
+  it('never offers an off switch to a model that refuses one', () => {
+    // GLM answers 400 "invalid thinking type, only be disabled when reasoning
+    // effort is none", so an off entry there would be a broken menu choice.
+    for (const id of ['glm-5.2', 'glm-5.3', 'z-ai/glm-5.3-flash', 'zai-org/GLM-5.2']) {
+      expect(matchRegistry(id)?.reasoning?.efforts, id).not.toContain('off')
+    }
+  })
+
+  it('matches the remaining named models', () => {
+    expect(matchRegistry('z-ai/glm-5.3-flashx')?.displayName).toBe('GLM-5.3 FlashX')
+    expect(matchRegistry('zai-org/GLM-5.2')?.displayName).toBe('GLM-5.2')
+    expect(matchRegistry('Qwen/Qwen3.8-Omni-Flash')?.displayName).toBe('Qwen3.8 Omni Flash')
+    expect(matchRegistry('gpt-5.6-sol')?.displayName).toBe('GPT-5.6 Sol')
+    expect(matchRegistry('meituan/LongCat-2.0:free')?.displayName).toBe('LongCat 2.0')
+    expect(matchRegistry('poolside/laguna-s-2.1-free')?.displayName).toBe('Laguna S 2.1 Free')
+    expect(matchRegistry('meta/muse-spark-1.3-contributor')?.displayName).toBe('Muse Spark 1.3 Contributor')
+    expect(matchRegistry('tencent/hy3-paid')?.contextWindow).toBe(262_144)
+    expect(matchRegistry('poolside/some-model')).toBeUndefined()
+  })
+
+  it('gives every entry a distinct, self-resolving id', () => {
+    const seen = new Set<string>()
+    for (const entry of REGISTRY) {
+      expect(seen.has(entry.id), `duplicate registry id ${entry.id}`).toBe(false)
+      seen.add(entry.id)
+      expect(matchRegistry(entry.id)).toBe(entry)
+    }
+  })
+
+  it('never sizes a model below the fallback', () => {
+    // The old registry left most entries on the fallback, so the menu read
+    // 128K for models that publish far more.
+    //
+    // This floor guards a GUESSED window: it is what stops an id nothing sizes
+    // from being advertised as too small to use. It is deliberately not applied
+    // to GO_REGISTRY, whose windows are models.dev's published figures -- and
+    // glm-5.1's published 202,752 is legitimately below the floor. Bending that
+    // number up to 204,800 to satisfy a test would advertise a window the model
+    // does not have.
+    for (const entry of REGISTRY) {
+      expect(entry.contextWindow, entry.id).toBeGreaterThanOrEqual(FALLBACK_CONTEXT_WINDOW)
+    }
+    // A rung a model declares for itself must be one it can actually serve.
+    // (`RegistryEntry.contextOptions` used to be read here, which does not exist
+    // on a registry entry -- the loop was dead code that checked nothing. The
+    // offered ladder is derived by `contextChoicesFor`; the field an entry
+    // really carries is the declared rung.)
+    for (const entry of [...REGISTRY, ...GO_REGISTRY]) {
+      for (const length of entry.contextLengths ?? []) {
+        expect(length, entry.id).toBeLessThanOrEqual(entry.contextWindow)
+      }
+    }
+  })
+
+  it('lets a declared rung sit below the fallback window, unlike a guessed window', () => {
+    // A declared RUNG is not a guess and not a window -- it is a fact about
+    // pricing, and Haiku 5.5's cheap tier is 100,000 decimal tokens, BELOW the
+    // 204,800 floor. Holding rungs to the floor would delete the one budget this
+    // plugin added the field for.
+    const haiku = GO_REGISTRY.find(entry => entry.id === 'claude-haiku-5-5')
+    expect(haiku?.contextLengths).toContain(CONTEXT_100K)
+    expect(CONTEXT_100K).toBeLessThan(FALLBACK_CONTEXT_WINDOW)
+  })
+
+  it('formats context labels as 200K/256K/400K/1M', () => {
+    expect(contextLabel(204_800)).toBe('200K')
+    expect(contextLabel(262_144)).toBe('256K')
+    expect(contextLabel(409_600)).toBe('400K')
+    expect(contextLabel(1_048_576)).toBe('1M')
+    expect(displayNameWithContext('Kimi K3', 262_144)).toBe('Kimi K3 [256K]')
+  })
+
+  it('offers only the ladder steps a model can actually honour', () => {
+    // 1M is the whole ladder; a 256K model can only honour its first two steps.
+    expect(contextChoicesFor(1_048_576)).toEqual([204_800, 262_144, 409_600, 1_048_576])
+    expect(contextChoicesFor(262_144)).toEqual([204_800, 262_144])
+    // A window below the whole ladder still offers itself, so a model is never
+    // left without a choice.
+    expect(contextChoicesFor(131_072)).toEqual([131_072])
+    expect(CONTEXT_LADDER[0]).toBe(204_800)
+  })
+
+  it('uses the endpoint display name for unknown ids when it adds information', () => {
+    const beautified = catalogEntry({ id: 'meta/llama-x', displayName: 'Llama X' })
+    expect(beautified.displayName).toBe('Llama X')
+    expect(beautified.contextWindow).toBe(FALLBACK_CONTEXT_WINDOW)
+
+    const raw = catalogEntry({ id: 'meta/llama-x', displayName: 'meta/llama-x' })
+    expect(raw.displayName).toBe('meta/llama-x')
+
+    const unnamed = catalogEntry({ id: 'inclusionai/x' })
+    expect(unnamed.displayName).toBe('inclusionai/x')
+  })
+
+  it('projects registry entries over endpoint rows and honors disclosed reasoning', () => {
+    const known = catalogEntry({ id: 'kimi-k3', displayName: 'whatever' })
+    expect(known.displayName).toBe('Kimi K3')
+    expect(known.contextWindow).toBe(262_144)
+    expect(known.reasoning?.efforts).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+    expect(known.vision).toBe(true)
+
+    // The endpoint discloses no reasoning metadata, so a row without one takes
+    // the group vocabulary.
+    const disclosed = catalogEntry({ id: 'grok-x', reasoningEfforts: ['low', 'high'] })
+    expect(disclosed.reasoning).toEqual({ efforts: ['low', 'high'], defaultEffort: 'high' })
+
+    // A registry entry wins over both the disclosed list and the group default.
+    const group = catalogEntry({ id: 'gpt-5.6-sol' }, { efforts: ['minimal', 'low', 'medium'], defaultEffort: 'medium' })
+    expect(group.displayName).toBe('GPT-5.6 Sol')
+    expect(group.reasoning?.efforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+  })
+
+  it('treats an unknown model as image-capable and unranked', () => {
+    const unknown = catalogEntry({ id: 'meta/llama-x' })
+    expect(unknown.vision).toBe(true)
+    expect(unknown.rank).toBe(Number.MAX_SAFE_INTEGER)
+    expect(unknown.contextOptions).toBeUndefined()
+  })
+
+  it('never invents registry models the endpoint did not list', () => {
+    // The catalog is a projection of the discovered rows, so a registry entry
+    // without a matching upstream id simply never appears.
+    const upstream = [{ id: 'unlisted-model' }]
+    const catalog = upstream.map(row => catalogEntry(row))
+    expect(catalog).toHaveLength(1)
+    expect(catalog[0]?.displayName).toBe('unlisted-model')
+  })
+})

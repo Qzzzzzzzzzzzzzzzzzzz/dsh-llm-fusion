@@ -1,0 +1,230 @@
+{
+  "name": "dsh-llm-fusion",
+  "version": "0.1.0",
+  "description": "OpenCode Go and Protocom/Command Code/ClinePass provider engines for DeepSeek Harness, shipped as one installable bundle",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.1-rc.5"
+  },
+  "main": "./lib/opencode-go/index.js",
+  "types": null,
+  "exports": {
+    "./opencode-go": {
+      "default": "./lib/opencode-go/index.js"
+    },
+    "./protocom": {
+      "default": "./lib/protocom/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "NOTICE",
+    "README.md",
+    "LICENSE-opencode-go",
+    "LICENSE-protocom"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-model-selection"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "smoke": "node scripts/smoke-load.mjs",
+    "verify": "npm run build && npm run test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-api-gateway": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-api-remotes": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-api-settings-controller": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-locale": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-store": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-conversation": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-model-selection": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-renderer": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-settings": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-credentials": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-fs": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-launch-environment": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-timeout": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-typert-registry": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-agent": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/dsh-client-connection": ">=0.2.1-rc.5 <0.3.0-0",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-api-remotes": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-api-gateway": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-api-settings-controller": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-store": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-slots": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-renderer": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-locale": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-model-selection": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-conversation": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-typert-registry": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.129.0",
+    "@deepseek-ai/dsh-brand": "0.2.1-rc.5",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "openai": "7.19.0",
+    "undici": "7.30.0",
+    "eventsource-parser": "^3.1.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.10",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.6",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-agent-preset-registry": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-api-gateway": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-api-remotes": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-api-settings-controller": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-atomic-write": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-attachment": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-locale": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-store": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-conversation": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-model-selection": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-primitives": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-credentials": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-credentials-local": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-deque": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-fs": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-home-paths": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-launch-environment": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-native-command": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-sandbox": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-scope": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-session-projection": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-settings": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-timeout": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-typert-registry": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-user-approval": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-util-code-language": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-util-crypto": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-util-values": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-util-workspace-path": "0.2.1-rc.5",
+    "@google/genai": "2.21.0",
+    "@shikijs/langs": "^4.3.1",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^22.20.0",
+    "@types/react": "~18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@types/semver": "7.8.0",
+    "anser": "^2.3.5",
+    "clsx": "^2.0.0",
+    "diff": "^9.0.0",
+    "esbuild": "^0.25.0",
+    "immer": "^10.1.1",
+    "jsdom": "^30.1.0",
+    "katex": "^0.16.47",
+    "lightningcss": "^1.32.0",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "mdast-util-math": "^3.0.0",
+    "micromark-core-commonmark": "^2.0.3",
+    "micromark-extension-gfm": "^3.0.0",
+    "micromark-extension-math": "^3.1.0",
+    "micromark-factory-space": "^2.0.1",
+    "micromark-util-character": "^2.1.1",
+    "micromark-util-classify-character": "^2.0.1",
+    "micromark-util-sanitize-uri": "^2.0.1",
+    "micromark-util-symbol": "^2.0.1",
+    "micromark-util-types": "^2.0.2",
+    "opencode-go-pi-ai": "npm:@earendil-works/pi-ai@1.5.0",
+    "react": "^18.3.1",
+    "react-dom": "18.3.1",
+    "rollup": "^4.64.2",
+    "rollup-plugin-dts": "^6.5.1",
+    "semver": "7.8.5",
+    "shiki": "^4.3.1",
+    "simple-icons": "16.31.0",
+    "vitest": "^4.1.8",
+    "zustand": "~4.4.7",
+    "@deepseek-ai/dsh-client-connection": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-host-webserver": "0.2.1-rc.5",
+    "@testing-library/user-event": "^14.6.7",
+    "yaml": "2.9.0",
+    "typescript": "6.0.3"
+  },
+  "optionalDependencies": {
+    "bun": "1.4.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Qzzzzzzzzzzzzzzzzzzz/dsh-llm-fusion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Qzzzzzzzzzzzzzzzzzzz/dsh-llm-fusion/issues"
+  },
+  "homepage": "https://github.com/Qzzzzzzzzzzzzzzzzzzz/dsh-llm-fusion#readme",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "opencode-go",
+    "protocom",
+    "llm",
+    "cordis"
+  ]
+}

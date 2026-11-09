@@ -1,0 +1,43 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: build and test (node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # 仓库暂不提交 lockfile（package-lock.json / pnpm-lock.yaml 都没有），
+      # 因此这里用 `npm install` 而不是 `npm ci`；等 lockfile 进库后再切换为
+      # `npm ci`（或改用 pnpm + pnpm/action-setup 并提交 pnpm-lock.yaml）。
+      - name: install
+        run: npm install --no-audit --no-fund
+
+      # 构建两个 host bundle、Free worker 与合并后的 client bundle。
+      # lib/ 是提交进仓库的产物，这里重新构建以验证 src/ 与 lib/ 一致可构建。
+      - name: build
+        run: npm run build
+
+      # `npm test` = scripts/test.mjs：两个引擎各自的 vitest 套件
+      # （vitest.opencode-go.config.ts / vitest.protocom.config.ts），
+      # 最后追加 scripts/smoke-load.mjs 的跨引擎加载检查。
+      - name: test
+        run: npm test

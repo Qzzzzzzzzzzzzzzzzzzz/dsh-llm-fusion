@@ -1,0 +1,161 @@
+import { fixtureModels, modelEntry, modelsDocument } from './data.ts'
+import { createServer } from 'node:http'
+import type { IncomingMessage, Server, ServerResponse } from 'node:http'
+
+export interface MockGateway {
+  url: string
+  paths: string[]
+  headers: IncomingMessage['headers'][]
+  bodies: unknown[]
+  /** How many times `GET /models` was answered. */
+  modelListings: number
+  setModelListing: (status: number, body: unknown) => void
+  pushCompletions: (script: CompletionsScript) => void
+  close: () => Promise<void>
+}
+
+/** One scripted chat-completions behavior. */
+export interface CompletionsScript {
+  status?: number
+  events?: string[]
+  /** Anthropic requires named SSE events as well as each JSON event's type. */
+  namedEvents?: boolean
+  body?: string
+  headers?: Record<string, string>
+  /** Milliseconds between SSE events; exceeding the idle timeout fails the stream. */
+  delayMs?: number
+  /** Write the events and leave the response open, until the caller aborts. */
+  hangOpen?: boolean
+  /** Observe whether the consumer releases a logically finished stream. */
+  onClose?: () => void
+}
+
+const servers: Server[] = []
+
+/** Close every gateway opened since the last call; run from each spec's afterEach. */
+export async function closeMockGateways(): Promise<void> {
+  await Promise.all(servers.splice(0).map(server => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) })))
+}
+
+/** A minimal complete text generation in pi-ai's chat-completions shape. */
+export const textEvents = [
+  '{"choices":[{"delta":{"role":"assistant","content":""},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{"content":"hello"},"index":0,"finish_reason":null}]}',
+  '{"choices":[{"delta":{},"index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}',
+  '[DONE]',
+]
+
+/** A Google stream includes thinking, visible text, a finish reason and usage. */
+export const googleTextEvents = [
+  { candidates: [{ content: { role: 'model', parts: [{ text: 'thought', thought: true }] } }] },
+  { candidates: [{ content: { role: 'model', parts: [{ text: 'hello' }] }, finishReason: 'STOP' }],
+    usageMetadata: { promptTokenCount: 3, candidatesTokenCount: 1, thoughtsTokenCount: 1, totalTokenCount: 5 } },
+].map(event => JSON.stringify(event))
+
+/**
+ * OpenCode Go gateway stand-in: `GET /models` answers the configured listing,
+ * `POST /chat/completions` replays scripted SSE behaviors in order.
+ */
+export async function mockGateway(modelListing: {
+  status: number
+  body: unknown
+  responseBodyTransform?: (body: Buffer, request: IncomingMessage) => Buffer
+  responseHeaders?: Record<string, string>
+}): Promise<MockGateway> {
+  const paths: string[] = []
+  const headers: IncomingMessage['headers'][] = []
+  const bodies: unknown[] = []
+  let listing = modelListing
+  let modelListings = 0
+  const completions: CompletionsScript[] = []
+  const openResponses = new Set<ServerResponse>()
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    openResponses.add(response)
+    response.on('close', () => {
+      openResponses.delete(response)
+    })
+    let body = ''
+    request.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
+    request.on('end', () => {
+      paths.push(request.url ?? '')
+      headers.push(request.headers)
+      if ((request.url === '/models' || request.url === '/v1/models') && request.method === 'GET') {
+        modelListings += 1
+        const payload = Buffer.from(JSON.stringify(listing.body))
+        const transformed = listing.responseBodyTransform?.(payload, request) ?? payload
+        response.writeHead(listing.status, {
+          'content-type': 'application/json', 'content-length': String(transformed.byteLength), ...listing.responseHeaders,
+        })
+        response.end(transformed)
+        return
+      }
+      bodies.push(body.length === 0 ? undefined : JSON.parse(body))
+      const behavior = completions.shift()
+      if (behavior === undefined) {
+        response.writeHead(500, { 'content-type': 'application/json' })
+        response.end('{"error":"script exhausted"}')
+        return
+      }
+      if (behavior.onClose) response.once('close', behavior.onClose)
+      if (behavior.status !== undefined && behavior.status !== 200) {
+        response.writeHead(behavior.status, { 'content-type': 'application/json', ...behavior.headers })
+        response.end(behavior.body ?? '{}')
+        return
+      }
+      if (behavior.body !== undefined) {
+        response.writeHead(200, { 'content-type': 'application/json', ...behavior.headers })
+        response.end(behavior.body)
+        return
+      }
+      response.writeHead(200, { 'content-type': 'text/event-stream', ...behavior.headers })
+      if (behavior.hangOpen === true) {
+        for (const event of behavior.events ?? []) response.write(`data: ${event}\n\n`)
+        return
+      }
+      let index = 0
+      const writeNext = (): void => {
+        const event = behavior.events?.[index++]
+        if (event === undefined) { response.end(); return }
+        response.write(`${behavior.namedEvents ? `event: ${JSON.parse(event).type}\n` : ''}data: ${event}\n\n`)
+        if (behavior.delayMs === undefined) writeNext()
+        else setTimeout(writeNext, behavior.delayMs)
+      }
+      writeNext()
+    })
+  })
+  servers.push(server)
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (address === null || typeof address === 'string') throw new Error('no port')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    paths,
+    headers,
+    bodies,
+    get modelListings() { return modelListings },
+    setModelListing: (status, bodyListing) => {
+      listing = { status, body: bodyListing }
+    },
+    pushCompletions: (script) => {
+      completions.push(script)
+    },
+    close: () => new Promise<void>((resolve) => {
+      // Hanging abort-test responses keep the server alive unless destroyed.
+      for (const response of openResponses) response.destroy()
+      server.close(() => {
+        resolve()
+      })
+    }),
+  }
+}
+
+/** The small shared chat fixture used by request tests. */
+export function fullLiveListing(): string[] {
+  return ['deepseek-v4-pro', 'deepseek-v4.1-flash', 'kimi-k3', 'minimax-m3']
+}
+
+/** Full gateway declarations, including arbitrary models absent from the shared fixture. */
+export function listingBody(ids: readonly string[]): unknown {
+  const fixtures = fixtureModels()
+  return modelsDocument(Object.fromEntries(ids.map(id => [id, fixtures[id] ?? modelEntry({ name: id })])))
+}

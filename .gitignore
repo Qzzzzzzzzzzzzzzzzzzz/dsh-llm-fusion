@@ -1,0 +1,17 @@
+# 依赖目录。合并仓库的开发态 node_modules 可能是指向共享 store 的链接，
+# 因此同时忽略目录形式与链接形式，避免误提交。
+node_modules/
+node_modules
+
+# 日志与本地缓存
+*.log
+
+# 操作系统噪音
+.DS_Store
+Thumbs.db
+
+# 测试覆盖率报告
+coverage/
+
+# 注意：lib/ 是随包提交的预构建产物，必须保留在版本库中；
+# tests/ 同样随仓库提交，不要忽略。

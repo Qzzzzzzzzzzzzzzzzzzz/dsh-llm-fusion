@@ -1,0 +1,72 @@
+# NOTICE
+
+`dsh-llm-fusion` packages two independently maintained DSH plugins. Both are
+MIT-licensed; their licenses are reproduced verbatim in this repository, and
+each engine's source is vendored under `src/engines/<name>` with the upstream
+version that was vendored.
+
+## dsh-opencode-go
+
+- Upstream: https://github.com/Duskriver/dsh-opencode-go
+- Vendored version: 0.2.1
+- Copyright (c) 2026 DeepSeek
+- Copyright (c) 2026 dsh-opencode-go contributors
+- License: MIT (see `LICENSE-opencode-go`)
+
+### Local changes against upstream 0.2.1
+
+1. `src/engines/opencode-go/adapter.ts` — the fallback wire identity for calls
+   that arrive without a Session id (`title generation`, probes, compaction) is
+   now stable per adapter instance instead of a fresh UUID per call, and every
+   request carries `x-deepseek-harness-session-id` beside `x-opencode-session`.
+   Rationale: the gateway then accounts non-conversational traffic under one
+   session instead of creating a session (and a prompt-cache key) per call, and
+   the vendor's native header is present on model paths where the OpenCode
+   header is not yet threaded. This is a deliberate behaviour change; the two
+   upstream tests that asserted the old contract were updated with it.
+
+2. Interaction with `dsh-llm-fusion`: none beyond the package boundary. The
+   engine keeps its own loader entry id, settings namespace and routes.
+
+## dsh-protocom-api
+
+- Upstream: https://github.com/AIMFllyYS/dsh-protocom-api
+- Vendored version: 1.4.0
+- Copyright (c) 2026 AIMFllyYS
+- License: MIT (see `LICENSE-protocom`)
+
+### Local changes against upstream 1.4.0
+
+1. `src/engines/protocom/adapter.ts` — the value sent in the session-scoping
+   header is reduced to a legal, bounded wire value: visible ASCII ids pass
+   through unchanged, anything else (non-ASCII, control characters, an id
+   already inside the reserved mapped namespace, or one longer than 64
+   characters) is hashed with SHA-256 over UTF-16LE and base64url-encoded.
+   Upstream sent `String(sessionId)` verbatim, which can put non-ASCII text or
+   an over-long value into an HTTP header.
+
+2. `src/engines/protocom/client/index.ts` and `client/locale.ts` — the OpenCode
+   Go subscription tab registers under the slot id `opencode-go-sub` instead of
+   `OPENCODE_GO.ns` (`opencode-go`), and its labels read "OpenCode Go
+   (subscription)". Upstream could use `opencode-go` because it shipped alone;
+   in this bundle the OpenCode Go engine already registers that
+   `settings.section` id, and the slot registry refuses two entries with one id
+   at one priority, so the duplicate registration aborted the rest of the
+   Protocom tab set. Only the UI slot key and its copy changed: Protocom reads
+   and writes its settings through Loader entry `protocom-api` plus section
+   key, never through the slot id, so no stored value moves.
+
+3. Interaction with `dsh-llm-fusion`: none beyond the package boundary.
+
+## Why a packaging merge and not a source rewrite
+
+The two engines implement their wire layers differently: `dsh-opencode-go`
+delegates to the `pi-ai` SDK and carries a bespoke conversion/transport layer,
+while `dsh-protocom-api` implements the chat-completions, Responses and
+Anthropic Messages wires itself and drives them through a generic
+`ProviderFamily` abstraction. Folding one into the other would mean rewriting
+roughly 12k lines of source and re-validating roughly 9k lines of tests for
+each side, and then tracking two upstreams in the merged tree. `v0.1` therefore
+keeps both engines intact, byte-identical apart from the two changes above, and
+merges at the packaging, routing, settings and client boundaries — see
+`README.md`.

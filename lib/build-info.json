@@ -1,0 +1,18 @@
+{
+  "name": "dsh-llm-fusion",
+  "version": "0.1.0",
+  "hostExternals": [
+    "@deepseek-ai/*",
+    "undici",
+    "openai",
+    "@anthropic-ai/sdk"
+  ],
+  "clientExternals": [
+    "react",
+    "react/jsx-runtime",
+    "@deepseek-ai/cordis",
+    "@deepseek-ai/dsh-client-store",
+    "@deepseek-ai/dsh-client-ui-slots",
+    "@deepseek-ai/dsh-client-ui-primitives"
+  ]
+}

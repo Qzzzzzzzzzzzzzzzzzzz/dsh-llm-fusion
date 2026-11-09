@@ -1,0 +1,340 @@
+/**
+ * The Command Code capability catalog: what the models in the endpoints listing
+ * can actually do.
+ *
+ * The endpoints listing (`/provider/v1/models`) is the ROUTING truth — it alone
+ * declares which wire serves each model — but it discloses no capability at all.
+ * The marketing page `/docs/plans/goat` is the CAPABILITY truth: it embeds a
+ * structured catalog in its Next.js streaming payload carrying `reasoning`,
+ * `vision`, `contextWindow`, pricing, and a plan gate per model.
+ *
+ * This module owns the join and the parsing. It is deliberately tolerant: the
+ * page is a SCRAPED, undocumented surface, so every failure degrades to "no
+ * capability claims" rather than to an empty menu. A model with no catalog row
+ * keeps the permissive vision default and simply offers no Effort submenu —
+ * exactly the behavior this plugin had before the catalog existed.
+ *
+ * Verified live 2026-09-23 (83 rows; snapshots under `.agents/`).
+ *
+ * @module dsh-protocom-api/commandcode-catalog
+ */
+
+/**
+ * Subscription tiers, weakest first.
+ *
+ * The page states a model's gate as a NAME (`Go`, `GOAT`, `Pro`, `Max`). The
+ * tiers are CUMULATIVE — which was confirmed by request: an account on
+ * `individual-goat` got HTTP 200 for a Go-tier model and a GOAT-tier model, and
+ * HTTP 403 `MODEL_NOT_IN_PLAN` for Pro- and Max-tier models. So a model is
+ * usable when its gate is at or below the account's own tier.
+ *
+ * The names are matched case-insensitively because the page spells the cheapest
+ * tier `Go` while the plan id uses `goat`; both appear in live data.
+ */
+export const COMMANDCODE_TIERS: readonly string[] = ['go', 'goat', 'pro', 'max']
+
+/**
+ * Rank one plan name, or undefined when it is not a tier this plugin knows.
+ * @param name - the plan name from the page or a plan id.
+ * @returns the zero-based rank, weakest first.
+ */
+export function tierRank(name: string | undefined): number | undefined {
+  if (name === undefined) return undefined
+  const at = COMMANDCODE_TIERS.indexOf(name.trim().toLowerCase())
+  return at === -1 ? undefined : at
+}
+
+/**
+ * Extract the tier from a subscription plan id such as `individual-goat`.
+ * @param planId - the plan id, if any.
+ * @returns the tier name in canonical lower case, or undefined.
+ */
+export function tierFromPlanId(planId: string | undefined): string | undefined {
+  if (planId === undefined) return undefined
+  for (const tier of COMMANDCODE_TIERS) {
+    // Matching on a word boundary avoids reading a hypothetical "goatx" as goat.
+    if (new RegExp(`(^|[^a-z])${tier}([^a-z]|$)`).test(planId.toLowerCase())) return tier
+  }
+  return undefined
+}
+
+/**
+ * Whether a model's own gate is included in the account's tier.
+ *
+ * An unknown gate on EITHER side means the question cannot be answered, and the
+ * model is kept: hiding a model the account can use is worse than showing one
+ * that fails with a clear provider message, and an unrecognized tier name is a
+ * catalog change rather than evidence of exclusion.
+ * @param modelGate - the model's `minPlanName`.
+ * @param accountTier - the account's own tier, lower case.
+ * @returns whether to offer the model.
+ */
+export function withinTier(modelGate: string | undefined, accountTier: string | undefined): boolean {
+  const gate = tierRank(modelGate)
+  const have = tierRank(accountTier)
+  if (gate === undefined || have === undefined) return true
+  return gate <= have
+}
+
+/** One model's capabilities, as the pricing page states them. */
+export interface CatalogCapabilities {
+  /** Whether the model may be sent a thinking parameter at all. */
+  reasoning: boolean
+  /** Whether the model accepts image input. */
+  vision: boolean
+  /** Advertised context window in tokens, when the page states one. */
+  contextWindow?: number
+  /** Dollars per million input tokens, when published. */
+  inputCost?: number
+  /** Dollars per million output tokens, when published. */
+  outputCost?: number
+  /** Dollars per million cached input tokens, when published. */
+  cacheReadCost?: number
+  /** Lowest subscription tier that includes this model. */
+  minPlan?: string
+}
+
+/** How many rows one page payload yielded, and whether the scrape succeeded. */
+export interface CatalogScrape {
+  /** Capability by model id, empty when the page could not be read. */
+  byId: ReadonlyMap<string, CatalogCapabilities>
+  /** Present when the scrape or parse failed; the caller reports it. */
+  problem?: string
+}
+
+/**
+ * Longest model id kept from the page. Mirrors the discovery parser's bound so
+ * a hostile page cannot push a large string into the catalog.
+ */
+const MAX_ID_LENGTH = 256
+
+/** Upper bound on rows accepted; the live page carries 83. */
+const MAX_CATALOG_ROWS = 1_000
+
+/**
+ * Reassemble the Next.js RSC payload a page streams through
+ * `self.__next_f.push([1, "..."]) ` fragments.
+ *
+ * Each fragment argument is a JSON string whose concatenation forms the payload,
+ * so reassembly is exactly "parse each fragment as a JSON string, then join".
+ * A malformed fragment is skipped rather than failing the whole page.
+ * @param html - the page body.
+ * @returns the concatenated payload.
+ */
+export function reassembleFlightPayload(html: string): string {
+  const fragments: string[] = []
+  const pattern = /self\.__next_f\.push\(\[1,\s*("(?:[^"\\]|\\.)*")\]\)/g
+  for (const match of html.matchAll(pattern)) {
+    try {
+      fragments.push(JSON.parse(match[1] as string) as string)
+    } catch {
+      // A fragment that is not a valid JSON string carries nothing usable.
+    }
+  }
+  return fragments.join('')
+}
+
+/**
+ * Pull every balanced top-level JSON array that follows a `"models":` key.
+ * Brace/bracket counting is done on the raw text rather than by a regex because
+ * the array is large and nested; scanning for balance is exact and linear.
+ * @param payload - the reassembled payload.
+ * @returns the candidate arrays as raw JSON text, largest first.
+ */
+export function modelsArrays(payload: string): string[] {
+  const marker = '"models":['
+  const found: string[] = []
+  let at = payload.indexOf(marker)
+  // How far a scan has already looked without finding a close. A payload whose
+  // arrays never close -- all an attacker needs to arrange -- made every scan
+  // run to end-of-input, so N markers cost N full passes: measured 31ms at
+  // 16KiB, 472ms at 64KiB, 1.9s at 128KiB, and the 8MiB cap allowed roughly
+  // sixteen minutes of a frozen event loop from one page that needs neither
+  // authentication nor a key. Carrying the frontier forward bounds the whole
+  // walk to a single pass, because a scan that found no close before P cannot
+  // find one for a marker that starts after P either.
+  let scanned = 0
+  while (at !== -1) {
+    const start = at + marker.length - 1
+    let depth = 0
+    let end = -1
+    let inString = false
+    let escaped = false
+    for (let index = Math.max(start, scanned); index < payload.length; index += 1) {
+      const char = payload[index] as string
+      if (inString) {
+        if (escaped) escaped = false
+        else if (char === '\\') escaped = true
+        else if (char === '"') inString = false
+        continue
+      }
+      if (char === '"') inString = true
+      else if (char === '[') depth += 1
+      else if (char === ']') {
+        depth -= 1
+        if (depth === 0) {
+          end = index
+          break
+        }
+      }
+    }
+    if (end !== -1) {
+      found.push(payload.slice(start, end + 1))
+      scanned = end + 1
+    } else {
+      // Nothing closes from here on, so no later marker can close either.
+      scanned = payload.length
+    }
+    at = payload.indexOf(marker, at + 1)
+  }
+  return found.sort((left, right) => right.length - left.length)
+}
+
+/** One row of the page's catalog, as much of it as this module reads. */
+interface CatalogRow {
+  id?: unknown
+  reasoning?: unknown
+  vision?: unknown
+  caps?: { reasoning?: unknown; vision?: unknown }
+  contextWindow?: unknown
+  inputCost?: unknown
+  outputCost?: unknown
+  cacheReadCost?: unknown
+  minPlanName?: unknown
+}
+
+/** A finite, non-negative number, or undefined. */
+function nonNegative(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/**
+ * Parse one catalog array into capabilities by model id.
+ *
+ * `reasoning` and `vision` are read from the flat fields first and fall back to
+ * `caps`; a row stating neither is skipped rather than guessed at, because a
+ * guessed capability is exactly the defect this catalog exists to remove.
+ * @param rows - the parsed JSON array.
+ * @returns capabilities by id, plus the ids that were discarded.
+ */
+export function parseCatalogRows(rows: unknown): { byId: Map<string, CatalogCapabilities>; skipped: number } {
+  const byId = new Map<string, CatalogCapabilities>()
+  if (!Array.isArray(rows)) return { byId, skipped: 0 }
+  let skipped = 0
+  for (const raw of rows.slice(0, MAX_CATALOG_ROWS)) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+      skipped += 1
+      continue
+    }
+    const row = raw as CatalogRow
+    const id = typeof row.id === 'string' && row.id.length > 0 && row.id.length <= MAX_ID_LENGTH ? row.id : undefined
+    const reasoning = typeof row.reasoning === 'boolean' ? row.reasoning : row.caps?.reasoning
+    const vision = typeof row.vision === 'boolean' ? row.vision : row.caps?.vision
+    if (id === undefined || typeof reasoning !== 'boolean' || typeof vision !== 'boolean') {
+      skipped += 1
+      continue
+    }
+    const contextWindow = nonNegative(row.contextWindow)
+    const inputCost = nonNegative(row.inputCost)
+    const outputCost = nonNegative(row.outputCost)
+    const cacheReadCost = nonNegative(row.cacheReadCost)
+    const minPlan = typeof row.minPlanName === 'string' && row.minPlanName.length > 0 ? row.minPlanName : undefined
+    byId.set(id, {
+      reasoning,
+      vision,
+      ...contextWindow === undefined || contextWindow === 0 ? {} : { contextWindow },
+      ...inputCost === undefined ? {} : { inputCost },
+      ...outputCost === undefined ? {} : { outputCost },
+      ...cacheReadCost === undefined ? {} : { cacheReadCost },
+      ...minPlan === undefined ? {} : { minPlan },
+    })
+  }
+  return { byId, skipped }
+}
+
+/**
+ * Resolve one listing id against the catalog, tolerating the page's habit of
+ * vendor-prefixing an otherwise identical id (`stealth/space-bunny-alpha` for a
+ * listing's `space-bunny-alpha`).
+ *
+ * The fallback is a suffix match on the last path segment, which is what the
+ * live data needs: 81 of 82 listing rows join this way, and the single miss is a
+ * dated snapshot id the page does not carry.
+ * @param byId - the parsed catalog.
+ * @param id - the listing id to resolve.
+ * @returns that model's capabilities, or undefined when the page omitted it.
+ */
+export function catalogFor(byId: ReadonlyMap<string, CatalogCapabilities>, id: string): CatalogCapabilities | undefined {
+  const exact = byId.get(id)
+  if (exact !== undefined) return exact
+  // The listing uses BARE ids ("space-bunny-alpha") while the page often
+  // vendor-prefixes the same model ("stealth/space-bunny-alpha"), so the tail
+  // is compared in BOTH directions: the page's key may be prefixed, or the
+  // listing's id may be. Matching only one direction silently loses every
+  // prefixed model — which is most of this catalog.
+  const tail = (value: string): string => {
+    const slash = value.lastIndexOf('/')
+    return slash === -1 ? value : value.slice(slash + 1)
+  }
+  const wanted = tail(id)
+  for (const [key, value] of byId) {
+    if (tail(key) === wanted) return value
+  }
+  // A dated snapshot id is the same model the page lists undated:
+  // "claude-haiku-4-5-20251001" on the listing, "claude-haiku-4-5" on the page.
+  // Without this the one affected model would lose its reasoning AND vision
+  // flags and render as a text-only non-reasoning entry -- wrong on both counts,
+  // and only for the model whose id carries a date.
+  const undated = /^(.*?)-\d{8}$/.exec(wanted)?.[1]
+  if (undated !== undefined) {
+    for (const [key, value] of byId) {
+      if (tail(key) === undated) return value
+    }
+  }
+  return undefined
+}
+
+/**
+ * Read the capability catalog out of a fetched page.
+ * @param html - the page body, or undefined when the fetch failed.
+ * @param failure - why the page could not be read, when it could not.
+ * @returns capabilities by id, with a problem note when the scrape degraded.
+ */
+export function scrapeCatalog(html: string | undefined, failure?: string): CatalogScrape {
+  if (html === undefined) return { byId: new Map(), problem: failure ?? 'the capability page could not be read' }
+  const payload = reassembleFlightPayload(html)
+  if (payload.length === 0) return { byId: new Map(), problem: 'the capability page carried no readable payload' }
+  const candidates = modelsArrays(payload)
+  if (candidates.length === 0) return { byId: new Map(), problem: 'the capability page carried no model catalog' }
+  for (const candidate of candidates) {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(candidate)
+    } catch {
+      continue
+    }
+    const { byId } = parseCatalogRows(parsed)
+    if (byId.size > 0) return { byId }
+  }
+  return { byId: new Map(), problem: 'the capability catalog did not parse' }
+}
+
+/** The page carrying the catalog. */
+export const COMMANDCODE_CATALOG_URL = 'https://commandcode.ai/docs/plans/goat'
+
+/** How long one scraped catalog is reused. The page changes at most daily. */
+export const CATALOG_TTL_MS = 6 * 60 * 60 * 1_000
+
+/**
+ * Largest page body accepted, in bytes.
+ *
+ * The live page is ~765 KB. The bound matters twice over: it caps memory, and it
+ * caps how long the catalog scan can run, since the scan's cost is a function of
+ * the payload it is handed. Both are attacker-influenced -- the fetch is
+ * unauthenticated, so a DNS hijack or a compromised vendor host decides what
+ * arrives.
+ */
+export const MAX_CATALOG_BYTES = 8 * 1024 * 1024
+
+/** Largest subscription reply accepted, in bytes. A planId document is tiny. */
+export const MAX_PLAN_BYTES = 64 * 1024
